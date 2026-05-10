@@ -1,0 +1,223 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: API Gateway configuration for Kanban Board application
+
+Parameters:
+  BackendALBDnsName:
+    Type: String
+    Description: DNS name of the Backend Application Load Balancer
+  LambdaFunctionArn:
+    Type: String
+    Description: ARN of the Lambda function for reports
+  StageName:
+    Type: String
+    Default: prod
+    Description: API Gateway stage name
+
+Resources:
+  # HTTP API Gateway
+  KanbanApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: kanban-board-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Requested-With
+        MaxAge: 86400
+
+  # Stage
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref KanbanApi
+      StageName: !Ref StageName
+      AutoDeploy: true
+
+  # ===== Backend Integration (HTTP_PROXY → ALB) =====
+  BackendIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref KanbanApi
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: !Sub 'http://${BackendALBDnsName}/{proxy}'
+      IntegrationMethod: ANY
+      PayloadFormatVersion: '1.0'
+
+  # ===== Lambda Integration (AWS_PROXY) =====
+  LambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref KanbanApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Ref LambdaFunctionArn
+      PayloadFormatVersion: '2.0'
+
+  # Lambda Permission for API Gateway invocation
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${KanbanApi}/*'
+
+  # ===== CRUD Routes → Backend =====
+
+  # Projects
+  RouteProjectsCollection:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /projects'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteProjectsItem:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /projects/{id}'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  # Boards
+  RouteProjectBoards:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /projects/{projectId}/boards'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteBoardsItem:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /boards/{id}'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteBoardBurndownData:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'GET /boards/{id}/burndown-data'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  # Columns
+  RouteBoardColumns:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /boards/{boardId}/columns'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteBoardColumnsReorder:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'PUT /boards/{boardId}/columns/reorder'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteColumnsItem:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /columns/{id}'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteColumnsDone:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'PATCH /columns/{id}/done'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  # Cards
+  RouteColumnCards:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /columns/{columnId}/cards'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteColumnCardsReorder:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'PUT /columns/{columnId}/cards/reorder'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteCardsItem:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'ANY /cards/{id}'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  RouteCardsMove:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'PATCH /cards/{id}/move'
+      Target: !Sub 'integrations/${BackendIntegration}'
+
+  # ===== Report Routes → Lambda =====
+
+  RouteBoardReport:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'GET /report/board/{id}'
+      Target: !Sub 'integrations/${LambdaIntegration}'
+
+  RouteSprintBurndown:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'GET /report/burndown/sprint/{id}'
+      Target: !Sub 'integrations/${LambdaIntegration}'
+
+  RouteProjectBurndown:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: 'GET /report/burndown/project/{id}'
+      Target: !Sub 'integrations/${LambdaIntegration}'
+
+  # ===== Default Route (404 for unknown routes) =====
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref KanbanApi
+      RouteKey: '$default'
+      Target: !Sub 'integrations/${Default404Integration}'
+
+  Default404Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref KanbanApi
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: !Sub 'http://${BackendALBDnsName}/not-found'
+      IntegrationMethod: ANY
+      PayloadFormatVersion: '1.0'
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${KanbanApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  ApiId:
+    Description: API Gateway ID
+    Value: !Ref KanbanApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiId'

@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+target/
+build/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Kiro
+.kiro/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Maven wrapper (optional, large jar)
+.mvn/wrapper/maven-wrapper.jar
