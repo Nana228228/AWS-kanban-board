@@ -32,8 +32,8 @@ export function calculateProjectBurndown(
   };
 }
 
-export async function handleProjectBurndown(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const pathParts = event.path.split('/');
+export async function handleProjectBurndown(event: any): Promise<APIGatewayProxyResult> {
+  const pathParts = (event.rawPath || event.path).split('/');
   const projectId = pathParts[pathParts.length - 1];
 
   try {

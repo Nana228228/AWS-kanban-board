@@ -31,3 +31,6 @@ Thumbs.db
 
 # Maven wrapper (optional, large jar)
 .mvn/wrapper/maven-wrapper.jar
+
+# Docs (guias internos)
+docs/

@@ -30,8 +30,8 @@ export function calculateBoardStatistics(board: BoardResponse): BoardReportRespo
   };
 }
 
-export async function handleBoardReport(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const pathParts = event.path.split('/');
+export async function handleBoardReport(event: any): Promise<APIGatewayProxyResult> {
+  const pathParts = (event.rawPath || event.path).split('/');
   const boardId = pathParts[pathParts.length - 1];
 
   try {

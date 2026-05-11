@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Board, KanbanColumn, Card } from '../types';
+import type { Board } from '../types';
 import * as api from '../services/api';
 
 interface UseKanbanReturn {

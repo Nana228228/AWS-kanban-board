@@ -3,7 +3,6 @@ import { useParams, Link } from 'react-router-dom';
 import {
   DndContext,
   DragEndEvent,
-  DragOverEvent,
   PointerSensor,
   useSensor,
   useSensors,

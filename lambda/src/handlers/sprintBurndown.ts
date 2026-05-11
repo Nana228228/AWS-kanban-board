@@ -79,8 +79,8 @@ export function calculateSprintBurndown(data: BurndownDataResponse): SprintBurnd
   };
 }
 
-export async function handleSprintBurndown(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const pathParts = event.path.split('/');
+export async function handleSprintBurndown(event: any): Promise<APIGatewayProxyResult> {
+  const pathParts = (event.rawPath || event.path).split('/');
   const boardId = pathParts[pathParts.length - 1];
 
   try {

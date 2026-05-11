@@ -45,6 +45,7 @@ Resources:
       AutoDeploy: true
 
   # ===== Backend Integration (HTTP_PROXY → ALB) =====
+  # Uses catch-all proxy to forward the full path to the ALB
   BackendIntegration:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
@@ -72,104 +73,7 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${KanbanApi}/*'
 
-  # ===== CRUD Routes → Backend =====
-
-  # Projects
-  RouteProjectsCollection:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /projects'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteProjectsItem:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /projects/{id}'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  # Boards
-  RouteProjectBoards:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /projects/{projectId}/boards'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteBoardsItem:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /boards/{id}'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteBoardBurndownData:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'GET /boards/{id}/burndown-data'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  # Columns
-  RouteBoardColumns:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /boards/{boardId}/columns'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteBoardColumnsReorder:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'PUT /boards/{boardId}/columns/reorder'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteColumnsItem:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /columns/{id}'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteColumnsDone:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'PATCH /columns/{id}/done'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  # Cards
-  RouteColumnCards:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /columns/{columnId}/cards'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteColumnCardsReorder:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'PUT /columns/{columnId}/cards/reorder'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteCardsItem:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'ANY /cards/{id}'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  RouteCardsMove:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref KanbanApi
-      RouteKey: 'PATCH /cards/{id}/move'
-      Target: !Sub 'integrations/${BackendIntegration}'
-
-  # ===== Report Routes → Lambda =====
+  # ===== Report Routes → Lambda (defined BEFORE the catch-all) =====
 
   RouteBoardReport:
     Type: AWS::ApiGatewayV2::Route
@@ -192,22 +96,13 @@ Resources:
       RouteKey: 'GET /report/burndown/project/{id}'
       Target: !Sub 'integrations/${LambdaIntegration}'
 
-  # ===== Default Route (404 for unknown routes) =====
+  # ===== Catch-all route → Backend (forwards everything else to ALB) =====
   DefaultRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref KanbanApi
       RouteKey: '$default'
-      Target: !Sub 'integrations/${Default404Integration}'
-
-  Default404Integration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref KanbanApi
-      IntegrationType: HTTP_PROXY
-      IntegrationUri: !Sub 'http://${BackendALBDnsName}/not-found'
-      IntegrationMethod: ANY
-      PayloadFormatVersion: '1.0'
+      Target: !Sub 'integrations/${BackendIntegration}'
 
 Outputs:
   ApiEndpoint:
