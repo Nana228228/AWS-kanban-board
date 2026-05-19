@@ -27,6 +27,11 @@ Parameters:
     Type: String
     Description: ECR URI for the frontend Docker image
 
+  ExecutionRoleArn:
+    Type: String
+    Description: ARN of the existing IAM Role for ECS task execution (LabRole in lab accounts)
+    Default: ''
+
   BackendCpu:
     Type: String
     Default: '512'
@@ -311,7 +316,7 @@ Resources:
       LoadBalancerArn: !Ref ApplicationLoadBalancer
       Port: 80
       Protocol: HTTP
-      DefaultAction:
+      DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref FrontendTargetGroup
 
@@ -344,19 +349,8 @@ Resources:
           Weight: 1
 
   # ===== ECS Task Execution Role =====
-  ECSTaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${EnvironmentName}-ecs-execution-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+  # Em contas de lab (voclabs), não é possível criar IAM Roles.
+  # Usamos a LabRole pré-existente via parâmetro.
 
   # ===== Backend Task Definition =====
   BackendTaskDefinition:
@@ -368,7 +362,8 @@ Resources:
         - FARGATE
       Cpu: !Ref BackendCpu
       Memory: !Ref BackendMemory
-      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref ExecutionRoleArn
       ContainerDefinitions:
         - Name: backend
           Image: !Ref BackendImageUri
@@ -388,6 +383,8 @@ Resources:
               Value: !Ref DBMasterPassword
             - Name: SERVER_PORT
               Value: '8080'
+            - Name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              Value: update
           HealthCheck:
             Command:
               - CMD-SHELL
@@ -413,7 +410,8 @@ Resources:
         - FARGATE
       Cpu: !Ref FrontendCpu
       Memory: !Ref FrontendMemory
-      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref ExecutionRoleArn
       ContainerDefinitions:
         - Name: frontend
           Image: !Ref FrontendImageUri
@@ -443,8 +441,9 @@ Resources:
       ServiceName: !Sub '${EnvironmentName}-backend-service'
       Cluster: !Ref ECSCluster
       TaskDefinition: !Ref BackendTaskDefinition
-      DesiredCount: 2
+      DesiredCount: 1
       LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 120
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
@@ -465,7 +464,7 @@ Resources:
       ServiceName: !Sub '${EnvironmentName}-frontend-service'
       Cluster: !Ref ECSCluster
       TaskDefinition: !Ref FrontendTaskDefinition
-      DesiredCount: 2
+      DesiredCount: 1
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
