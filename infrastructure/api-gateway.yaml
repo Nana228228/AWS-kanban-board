@@ -45,13 +45,12 @@ Resources:
       AutoDeploy: true
 
   # ===== Backend Integration (HTTP_PROXY → ALB) =====
-  # Uses catch-all proxy to forward the full path to the ALB
   BackendIntegration:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
       ApiId: !Ref KanbanApi
       IntegrationType: HTTP_PROXY
-      IntegrationUri: !Sub 'http://${BackendALBDnsName}/{proxy}'
+      IntegrationUri: !Sub 'http://${BackendALBDnsName}'
       IntegrationMethod: ANY
       PayloadFormatVersion: '1.0'
 

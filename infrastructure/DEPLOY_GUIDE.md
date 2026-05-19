@@ -20,14 +20,18 @@ Internet
 
 ---
 
-## Etapa 0 — Criar e Configurar o Cloud9
+## Etapa 0 — Criar e Configurar o Cloud9 (via SSH)
+
+Em contas de lab, o Cloud9 não permite conexão via SSM (bloqueia criação de IAM Roles). Use a conexão **SSH** em vez disso.
 
 1. No console AWS, busque **Cloud9** → **Create environment**
 2. Configure:
    - Name: `kanban-deploy`
+   - Environment type: **New EC2 instance**
    - Instance type: `t3.small`
    - Platform: `Amazon Linux 2023`
-   - Timeout: `4 hours` (para não desconectar no meio do deploy)
+   - Timeout: `4 hours`
+   - **Connection**: selecione **SSH** (não SSM)
 3. Clique **Create**
 4. Aguarde o ambiente abrir
 
@@ -36,7 +40,6 @@ Internet
 O disco padrão de 10 GB fica apertado com as imagens Docker. 15 GB é suficiente:
 
 ```bash
-# Aumentar disco para 15 GB
 INSTANCE_ID=$(ec2-metadata -i | cut -d' ' -f2)
 VOLUME_ID=$(aws ec2 describe-volumes \
   --filters Name=attachment.instance-id,Values=$INSTANCE_ID \
@@ -45,7 +48,6 @@ VOLUME_ID=$(aws ec2 describe-volumes \
 aws ec2 modify-volume --volume-id $VOLUME_ID --size 15
 sleep 10
 
-# Expandir a partição
 sudo growpart /dev/nvme0n1 1 2>/dev/null || sudo growpart /dev/xvda 1 2>/dev/null
 sudo xfs_growfs / 2>/dev/null || sudo resize2fs /dev/nvme0n1p1 2>/dev/null
 df -h /
@@ -54,11 +56,29 @@ df -h /
 ### Clonar o repositório
 
 ```bash
-git clone https://github.com/SEU_USUARIO/AWS-kanban-board.git
+git clone https://github.com/Nana228228/AWS-kanban-board.git
 cd AWS-kanban-board
 ```
 
-> Substitua pela URL real do seu repositório (ou faça upload dos arquivos via Cloud9).
+### Se o Cloud9 via SSH também falhar
+
+Use uma EC2 manual como alternativa:
+
+1. **EC2** → **Launch Instance**
+   - Name: `kanban-deploy`
+   - AMI: Amazon Linux 2023
+   - Instance type: `t3.small`
+   - Key pair: **Proceed without a key pair** (usaremos EC2 Instance Connect)
+   - Storage: 15 GB
+   - Em **Advanced Details** → **IAM instance profile**: selecione `LabInstanceProfile`
+2. Na lista de instâncias, selecione `kanban-deploy` → **Connect** → aba **EC2 Instance Connect** → **Connect**
+3. Instale Docker:
+   ```bash
+   sudo yum install -y docker git
+   sudo systemctl start docker
+   sudo usermod -aG docker ec2-user
+   newgrp docker
+   ```
 
 ---
 
