@@ -7,20 +7,20 @@ Este documento explica cada serviço AWS utilizado no projeto Kanban Board, por 
 ## Índice
 
 1. [O que é a Nuvem?](#1--o-que-é-a-nuvem)
-2. [VPC — Rede Virtual Privada](#2--vpc--virtual-private-cloud)
-3. [Subnets — Divisões da Rede](#3--subnets--divisões-da-rede)
-4. [Internet Gateway — Porta para a Internet](#4--internet-gateway--porta-para-a-internet)
-5. [Route Tables — Regras de Tráfego](#5--route-tables--regras-de-tráfego)
-6. [Security Groups — Firewall Virtual](#6--security-groups--firewall-virtual)
-7. [RDS — Banco de Dados Gerenciado](#7--rds--relational-database-service)
-8. [ECR — Registro de Imagens Docker](#8--ecr--elastic-container-registry)
-9. [ECS Fargate — Containers sem Servidor](#9--ecs-fargate--containers-sem-servidor)
-10. [ALB — Balanceador de Carga](#10--alb--application-load-balancer)
-11. [Lambda — Função Serverless](#11--lambda--função-serverless)
-12. [API Gateway — Porta de Entrada da API](#12--api-gateway--porta-de-entrada-da-api)
-13. [CloudWatch — Monitoramento e Logs](#13--cloudwatch--monitoramento-e-logs)
-14. [IAM — Controle de Acesso](#14--iam--identity-and-access-management)
-15. [Cloud9 e CloudShell — Ambientes de Desenvolvimento](#15--cloud9-e-cloudshell--ambientes-de-desenvolvimento)
+2. [VPC — Rede Virtual Privada](#2--vpc-virtual-private-cloud)
+3. [Subnets — Divisões da Rede](#3--subnets-divisões-da-rede)
+4. [Internet Gateway — Porta para a Internet](#4--internet-gateway-igw)
+5. [Route Tables — Regras de Tráfego](#5--route-tables-tabelas-de-roteamento)
+6. [Security Groups — Firewall Virtual](#6--security-groups-firewall-virtual)
+7. [RDS — Banco de Dados Gerenciado](#7--rds-relational-database-service)
+8. [ECR — Registro de Imagens Docker](#8--ecr-elastic-container-registry)
+9. [ECS Fargate — Containers sem Servidor](#9--ecs-fargate-elastic-container-service)
+10. [ALB — Balanceador de Carga](#10--alb-application-load-balancer)
+11. [Lambda — Função Serverless](#11--lambda-função-serverless)
+12. [API Gateway — Porta de Entrada da API](#12--api-gateway-http-api)
+13. [CloudWatch — Monitoramento e Logs](#13--cloudwatch-monitoramento-e-logs)
+14. [IAM — Controle de Acesso](#14--iam-identity-and-access-management)
+15. [Cloud9 e CloudShell — Ambientes de Desenvolvimento](#15--cloud9-e-cloudshell-ambientes-de-desenvolvimento)
 16. [Como Tudo se Conecta](#16--como-tudo-se-conecta)
 17. [Decisões Arquiteturais](#17--decisões-arquiteturais)
 18. [Glossário](#18--glossário)
@@ -29,9 +29,7 @@ Este documento explica cada serviço AWS utilizado no projeto Kanban Board, por 
 
 ## 1 — O que é a Nuvem?
 
-Computação em nuvem é usar computadores de outra empresa (AWS, Azure, Google Cloud) pela internet, em vez de comprar e manter seus próprios servidores.
-
-**Analogia:** Em vez de comprar uma casa (servidor próprio), você aluga um apartamento (nuvem). Alguém cuida da manutenção, segurança física e infraestrutura — você só usa.
+Computação em nuvem é o provisionamento sob demanda de recursos computacionais (CPU, memória, armazenamento, rede) via internet, com cobrança por uso (pay-as-you-go). O provedor (AWS) mantém os data centers físicos, virtualiza os recursos via hypervisors, e expõe APIs para criação/destruição programática de infraestrutura.
 
 ### Modelos de serviço
 
@@ -55,11 +53,14 @@ Computação em nuvem é usar computadores de outra empresa (AWS, Azure, Google 
 
 ### O que é
 
-Uma rede virtual isolada dentro da AWS. É como ter sua própria rede privada na nuvem — nenhum outro cliente da AWS pode ver ou acessar seus recursos dentro dela.
+Uma rede virtual isolada dentro da AWS, implementada via SDN (Software-Defined Networking). Cada VPC tem seu próprio espaço de endereçamento IP, tabelas de roteamento, e regras de firewall. O isolamento é garantido por encapsulamento de pacotes — o tráfego de uma VPC nunca se mistura com o de outra, mesmo compartilhando hardware físico.
 
-### Analogia
+### Detalhes técnicos
 
-Pense na VPC como um **condomínio fechado**. Tem muros (isolamento), portaria (Internet Gateway), e apartamentos (subnets). Você decide quem entra e quem sai.
+- Implementada sobre a infraestrutura de rede da AWS usando virtualização de rede (similar a VXLAN)
+- Cada VPC é confinada a uma região AWS, mas pode abranger múltiplas AZs
+- O range de IPs é definido na criação e não pode ser alterado (apenas expandido com CIDRs secundários)
+- Suporta IPv4 e dual-stack (IPv4 + IPv6)
 
 ### No nosso projeto
 
@@ -84,11 +85,11 @@ Nome: Projeto2-vpc
 
 ### O que é
 
-Subdivisões da VPC. Cada subnet fica numa Availability Zone (AZ) específica — que é um data center físico separado.
+Subdivisões lógicas da VPC, cada uma mapeada a uma Availability Zone (AZ) específica. Uma AZ corresponde a um ou mais data centers fisicamente isolados (energia, refrigeração, rede independentes) dentro de uma região. Cada subnet recebe um bloco CIDR menor que o da VPC.
 
-### Analogia
+### Subnet pública vs privada — diferença técnica
 
-Se a VPC é o condomínio, as subnets são os **blocos de apartamentos**. Alguns blocos ficam na frente (públicos, visíveis da rua) e outros nos fundos (privados, escondidos).
+A diferença não é um atributo da subnet em si, mas sim **qual Route Table está associada a ela**. Uma subnet é "pública" se sua Route Table tem uma rota `0.0.0.0/0 → Internet Gateway`. Sem essa rota, é "privada".
 
 ### No nosso projeto
 
@@ -118,11 +119,13 @@ O ALB exige subnets em pelo menos 2 Availability Zones. Isso garante **alta disp
 
 ### O que é
 
-O "portão" que conecta sua VPC à internet pública. Sem ele, nada dentro da VPC consegue acessar a internet (e vice-versa).
+Componente gerenciado pela AWS que realiza NAT (Network Address Translation) bidirecional entre IPs privados da VPC e IPs públicos da internet. É horizontalmente escalável e altamente disponível dentro de uma AZ. Diferente de um NAT Gateway (que só permite saída), o IGW permite tráfego de entrada e saída.
 
-### Analogia
+### Como funciona tecnicamente
 
-É a **portaria do condomínio**. Permite que moradores saiam (requests para internet) e que visitantes entrem (requests da internet para o ALB).
+1. Pacote sai de um recurso com IP público (ex: ALB) com destino externo
+2. O IGW traduz o IP privado do recurso para o Elastic IP/IP público associado
+3. Pacote de resposta chega no IGW, que traduz de volta para o IP privado e encaminha ao recurso
 
 ### No nosso projeto
 
@@ -147,11 +150,11 @@ A route table apontava `0.0.0.0/0` para um **NAT Gateway** em vez do IGW. Result
 
 ### O que é
 
-Regras que dizem para onde o tráfego de rede deve ir. Cada subnet está associada a uma route table.
+Conjunto de regras de roteamento IP (longest-prefix match) que determinam o next-hop de cada pacote baseado no endereço de destino. Cada subnet é associada a exatamente uma Route Table. O roteamento é avaliado localmente — não há roteamento entre subnets sem regra explícita (o tráfego intra-VPC usa a rota `local` implícita).
 
-### Analogia
+### Funcionamento técnico
 
-São as **placas de sinalização** dentro do condomínio. "Para sair do condomínio, vá pela portaria (IGW)". "Para ir ao bloco B, vire à direita (local)".
+O roteador virtual da VPC avalia as rotas por especificidade (longest prefix match): `/32` tem prioridade sobre `/24`, que tem prioridade sobre `/0`. A rota `local` (CIDR da VPC) é implícita e não pode ser removida.
 
 ### No nosso projeto
 
@@ -178,11 +181,16 @@ O RDS não precisa (e não deve) acessar a internet. Ele só conversa com o back
 
 ### O que é
 
-Firewall virtual que controla o tráfego de entrada (inbound) e saída (outbound) de cada recurso. Funciona como uma lista de permissões.
+Firewall stateful na camada 4 (transporte) que filtra tráfego por protocolo, porta e origem/destino. "Stateful" significa que se uma conexão de saída é permitida, a resposta de entrada é automaticamente permitida (sem regra explícita de inbound). Regras são avaliadas em conjunto — se qualquer regra permite o tráfego, ele passa (não há regras de deny explícitas).
 
-### Analogia
+### Diferença de Network ACL
 
-É o **interfone do apartamento**. Mesmo que alguém entre no condomínio (VPC), ainda precisa ser autorizado para entrar no seu apartamento específico.
+| | Security Group | Network ACL |
+|--|--|--|
+| Nível | Recurso (ENI) | Subnet |
+| Stateful | Sim | Não |
+| Regras | Só allow | Allow e deny |
+| Avaliação | Todas as regras | Ordem numérica |
 
 ### No nosso projeto
 
@@ -216,11 +224,7 @@ Em vez de liberar um IP específico, liberamos "qualquer recurso que pertença a
 
 ### O que é
 
-Banco de dados relacional gerenciado pela AWS. Você escolhe o engine (MySQL, PostgreSQL, etc.) e a AWS cuida de: backups, patches, replicação, failover.
-
-### Analogia
-
-É como contratar um **DBA (administrador de banco) 24/7** que cuida de tudo automaticamente. Você só usa o banco.
+Serviço gerenciado de banco de dados relacional. A AWS provisiona a instância, configura replicação síncrona (Multi-AZ), executa backups automáticos via snapshots do EBS, aplica patches de segurança do engine na janela de manutenção, e monitora métricas (CPU, IOPS, conexões) via CloudWatch. O acesso é via endpoint DNS que resolve para o IP privado da instância.
 
 ### No nosso projeto
 
@@ -263,11 +267,7 @@ Isso faz o Hibernate criar/atualizar as tabelas automaticamente. Em produção r
 
 ### O que é
 
-Repositório privado para armazenar imagens Docker na AWS. É o equivalente ao Docker Hub, mas privado e integrado com ECS.
-
-### Analogia
-
-É uma **estante de DVDs** onde você guarda as versões compiladas da sua aplicação. Quando o ECS precisa rodar um container, ele pega a imagem daqui.
+Registry de imagens OCI (Open Container Initiative) gerenciado pela AWS. Armazena imagens Docker como layers comprimidas em S3, com autenticação via IAM (token temporário de 12h gerado por `ecr get-login-password`). Suporta image scanning para vulnerabilidades (CVEs) e lifecycle policies para limpeza automática de imagens antigas.
 
 ### No nosso projeto
 
@@ -297,20 +297,16 @@ Código → docker build → docker tag → docker push → ECR
 
 ### O que é
 
-Serviço para rodar containers Docker sem gerenciar servidores. O **Fargate** é o modo "serverless" do ECS — você não precisa provisionar nem manter EC2 instances.
-
-### Analogia
-
-É como um **restaurante delivery**. Você entrega a receita (imagem Docker) e o restaurante (Fargate) prepara e serve o prato (container). Você não precisa ter cozinha própria.
+Orquestrador de containers gerenciado. O **Fargate** é o launch type serverless — a AWS provisiona a infraestrutura computacional (microVM Firecracker) sob demanda para cada task, sem expor instâncias EC2. Cada task recebe uma ENI (Elastic Network Interface) própria com IP privado na subnet, isolamento de rede completo via VPC networking.
 
 ### Conceitos do ECS
 
-| Conceito | O que é | Analogia |
-|----------|---------|----------|
-| **Cluster** | Agrupamento lógico de services | O restaurante |
-| **Task Definition** | Receita do container (imagem, CPU, RAM, variáveis) | A receita do prato |
-| **Task** | Uma instância rodando do container | Um prato sendo servido |
-| **Service** | Garante que N tasks estejam sempre rodando | O garçom que repõe pratos |
+| Conceito | Definição técnica |
+|----------|-------------------|
+| **Cluster** | Namespace lógico que agrupa services e tasks |
+| **Task Definition** | Template imutável (versionado) que define: imagem, CPU/RAM, port mappings, env vars, log config, IAM roles |
+| **Task** | Instância em execução de uma Task Definition (1 ou mais containers compartilhando rede e storage) |
+| **Service** | Controller que mantém N réplicas de uma Task Definition rodando, integra com ALB, e faz rolling updates |
 
 ### No nosso projeto
 
@@ -356,11 +352,7 @@ O Spring Boot demora ~50 segundos para iniciar. Sem esse grace period, o ALB mar
 
 ### O que é
 
-Distribui tráfego HTTP/HTTPS entre múltiplos targets (containers). Funciona na camada 7 (aplicação) — entende URLs, headers, métodos HTTP.
-
-### Analogia
-
-É a **recepcionista** de um prédio comercial. Quando alguém chega, ela pergunta "qual andar?" e direciona para o lugar certo.
+Load balancer de camada 7 (OSI) que opera no nível HTTP/HTTPS. Faz parse dos headers, path e query string de cada requisição para tomar decisões de roteamento. Distribui conexões entre targets registrados em Target Groups usando round-robin por padrão. Executa health checks periódicos e remove targets unhealthy do pool de roteamento.
 
 ### No nosso projeto
 
@@ -399,11 +391,7 @@ O ALB precisa ser acessível da internet para que os usuários acessem a aplica�
 
 ### O que é
 
-Executa código sem provisionar servidores. Você faz upload do código, define o trigger, e a AWS executa quando necessário. Cobra por execução (não por tempo ocioso).
-
-### Analogia
-
-É um **freelancer**. Você chama quando precisa, ele faz o trabalho, e você paga só pelo tempo trabalhado. Não tem salário fixo.
+Serviço de computação event-driven que executa código em resposta a triggers (API Gateway, S3, SQS, etc.) sem provisionamento de servidores. A AWS aloca um execution environment (microVM ou container reutilizado via warm start), executa o handler, e destrói o ambiente após inatividade. Cobrança por número de invocações + duração (GB-segundo).
 
 ### No nosso projeto
 
@@ -443,11 +431,7 @@ O API Gateway HTTP API envia eventos no formato 2.0, onde o path fica em `event.
 
 ### O que é
 
-Porta de entrada gerenciada para APIs. Recebe requisições HTTP, roteia para o destino correto (Lambda, ALB, etc.), e gerencia CORS, throttling, autenticação.
-
-### Analogia
-
-É o **porteiro inteligente** do prédio. Ele sabe que "entregas vão pela porta de serviço" (Lambda) e "visitantes vão pela porta principal" (ALB).
+Serviço gerenciado de proxy reverso para APIs HTTP/REST/WebSocket. Recebe requisições, aplica políticas (CORS, throttling, autenticação), roteia para integrações backend (Lambda, HTTP endpoints, serviços AWS), e retorna a resposta. O HTTP API (v2) é otimizado para baixa latência e custo, com roteamento baseado em método + path pattern e suporte nativo a JWT authorizers.
 
 ### No nosso projeto
 
@@ -481,11 +465,7 @@ Em vez de definir cada rota individualmente (o que causou erros no CloudFormatio
 
 ### O que é
 
-Serviço de monitoramento que coleta logs, métricas e alarmes de todos os recursos AWS.
-
-### Analogia
-
-São as **câmeras de segurança** do condomínio. Gravam tudo que acontece para você revisar depois se algo der errado.
+Serviço de observabilidade que agrega logs (CloudWatch Logs), métricas numéricas (CloudWatch Metrics), e alarmes (CloudWatch Alarms) de todos os recursos AWS. Logs são organizados em Log Groups → Log Streams. Métricas são séries temporais com namespace, dimensões e estatísticas (avg, sum, max, p99). Suporta queries via CloudWatch Logs Insights (linguagem de consulta própria).
 
 ### No nosso projeto
 
@@ -518,11 +498,7 @@ aws logs tail /aws/lambda/kanban-report --since 5m --region us-east-1
 
 ### O que é
 
-Controle de acesso da AWS. Define **quem** pode fazer **o quê** em **quais recursos**.
-
-### Analogia
-
-É o **sistema de crachás** de uma empresa. Cada pessoa tem um crachá (role) que libera acesso a certas salas (serviços).
+Serviço de controle de acesso baseado em políticas (PBAC). Define autenticação (quem é você) e autorização (o que pode fazer) para todos os recursos AWS. Usa o modelo de avaliação: deny por padrão → avalia todas as policies aplicáveis → allow explícito libera → deny explícito sempre vence. Suporta identidades (Users, Groups, Roles) e políticas (managed policies, inline policies) com granularidade de ação + recurso + condição.
 
 ### No nosso projeto
 
