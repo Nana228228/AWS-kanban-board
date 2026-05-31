@@ -101,7 +101,7 @@ Resources:
         - Key: Name
           Value: !Sub '${EnvironmentName}-public-subnet-2'
 
-  # ===== Private Subnets (for RDS) =====
+  # ===== Private Subnets (for RDS, ECS tasks, and internal ALB) =====
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -153,6 +153,25 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
+  # ===== NAT Gateway (allows private subnets to reach internet for ECR pulls) =====
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-nat-eip'
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-nat-gw'
+
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -160,6 +179,13 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${EnvironmentName}-private-rt'
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
 
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -177,17 +203,14 @@ Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for Application Load Balancer
+      GroupDescription: Security group for internal ALB - only VPC traffic (API Gateway via VPC Link)
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
+          CidrIp: 10.0.0.0/16
+          Description: Allow traffic from within VPC (API Gateway VPC Link)
       Tags:
         - Key: Name
           Value: !Sub '${EnvironmentName}-alb-sg'
@@ -269,16 +292,16 @@ Resources:
         - Key: Name
           Value: !Sub '${EnvironmentName}-rds'
 
-  # ===== Application Load Balancer =====
+  # ===== Application Load Balancer (Internal - accessible only via API Gateway VPC Link) =====
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Name: !Sub '${EnvironmentName}-alb'
-      Scheme: internet-facing
+      Scheme: internal
       Type: application
       Subnets:
-        - !Ref PublicSubnet1
-        - !Ref PublicSubnet2
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
       SecurityGroups:
         - !Ref ALBSecurityGroup
 
@@ -446,10 +469,10 @@ Resources:
       HealthCheckGracePeriodSeconds: 120
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
+          AssignPublicIp: DISABLED
           Subnets:
-            - !Ref PublicSubnet1
-            - !Ref PublicSubnet2
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
           SecurityGroups:
             - !Ref BackendSecurityGroup
       LoadBalancers:
@@ -468,10 +491,10 @@ Resources:
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
+          AssignPublicIp: DISABLED
           Subnets:
-            - !Ref PublicSubnet1
-            - !Ref PublicSubnet2
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
           SecurityGroups:
             - !Ref FrontendSecurityGroup
       LoadBalancers:
@@ -504,6 +527,30 @@ Outputs:
     Value: !GetAtt ApplicationLoadBalancer.DNSName
     Export:
       Name: !Sub '${AWS::StackName}-ALBDnsName'
+
+  ALBListenerArn:
+    Description: ALB Listener ARN for VPC Link integration
+    Value: !Ref ALBListener
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBListenerArn'
+
+  PrivateSubnet1Id:
+    Description: Private Subnet 1 ID (for VPC Link)
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet1Id'
+
+  PrivateSubnet2Id:
+    Description: Private Subnet 2 ID (for VPC Link)
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet2Id'
+
+  ALBSecurityGroupId:
+    Description: ALB Security Group ID (for VPC Link)
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBSecurityGroupId'
 
   RDSEndpoint:
     Description: RDS MySQL Endpoint

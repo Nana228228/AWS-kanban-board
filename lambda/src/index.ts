@@ -4,7 +4,10 @@ import { handleSprintBurndown } from './handlers/sprintBurndown';
 import { handleProjectBurndown } from './handlers/projectBurndown';
 
 export const handler = async (event: any): Promise<APIGatewayProxyResult> => {
-  const path = event.rawPath || event.path;
+  let path = event.rawPath || event.path || '';
+  
+  // Remove stage prefix (e.g., /prod) if present
+  path = path.replace(/^\/prod/, '') || '/';
 
   if (path.match(/^\/report\/board\/\d+$/)) {
     return handleBoardReport(event);

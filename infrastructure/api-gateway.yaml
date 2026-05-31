@@ -1,20 +1,43 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: API Gateway configuration for Kanban Board application
+Description: API Gateway configuration for Kanban Board application with VPC Link to internal ALB
 
 Parameters:
   BackendALBDnsName:
     Type: String
-    Description: DNS name of the Backend Application Load Balancer
+    Description: DNS name of the internal Backend Application Load Balancer
+  BackendALBListenerArn:
+    Type: String
+    Description: ARN of the ALB Listener (for VPC Link integration)
   LambdaFunctionArn:
     Type: String
     Description: ARN of the Lambda function for reports
+  PrivateSubnet1Id:
+    Type: String
+    Description: Private Subnet 1 ID for VPC Link
+  PrivateSubnet2Id:
+    Type: String
+    Description: Private Subnet 2 ID for VPC Link
+  ALBSecurityGroupId:
+    Type: String
+    Description: ALB Security Group ID for VPC Link
   StageName:
     Type: String
     Default: prod
     Description: API Gateway stage name
 
 Resources:
-  # HTTP API Gateway
+  # ===== VPC Link (connects API Gateway to internal ALB) =====
+  VpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: kanban-vpc-link
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref ALBSecurityGroupId
+
+  # ===== HTTP API Gateway =====
   KanbanApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
@@ -44,15 +67,17 @@ Resources:
       StageName: !Ref StageName
       AutoDeploy: true
 
-  # ===== Backend Integration (HTTP_PROXY → ALB) =====
+  # ===== Backend Integration (HTTP_PROXY → internal ALB via VPC Link) =====
   BackendIntegration:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
       ApiId: !Ref KanbanApi
       IntegrationType: HTTP_PROXY
-      IntegrationUri: !Sub 'http://${BackendALBDnsName}'
+      IntegrationUri: !Ref BackendALBListenerArn
       IntegrationMethod: ANY
       PayloadFormatVersion: '1.0'
+      ConnectionType: VPC_LINK
+      ConnectionId: !Ref VpcLink
 
   # ===== Lambda Integration (AWS_PROXY) =====
   LambdaIntegration:
@@ -95,7 +120,7 @@ Resources:
       RouteKey: 'GET /report/burndown/project/{id}'
       Target: !Sub 'integrations/${LambdaIntegration}'
 
-  # ===== Catch-all route → Backend (forwards everything else to ALB) =====
+  # ===== Catch-all route → Backend (forwards everything else to internal ALB) =====
   DefaultRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
@@ -105,7 +130,7 @@ Resources:
 
 Outputs:
   ApiEndpoint:
-    Description: API Gateway endpoint URL
+    Description: API Gateway endpoint URL (single entry point for all traffic)
     Value: !Sub 'https://${KanbanApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}'
     Export:
       Name: !Sub '${AWS::StackName}-ApiEndpoint'
@@ -115,3 +140,9 @@ Outputs:
     Value: !Ref KanbanApi
     Export:
       Name: !Sub '${AWS::StackName}-ApiId'
+
+  VpcLinkId:
+    Description: VPC Link ID
+    Value: !Ref VpcLink
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcLinkId'
