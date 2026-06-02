@@ -9,13 +9,15 @@ Guia testado e validado para deploy completo no AWS Academy Learner Lab.
 ```
 Internet
     │
-    └── API Gateway (HTTPS)
-         ├── GET /report/*  →  Lambda (Node.js 18)  →  ALB (HTTP)  →  Backend
-         └── $default       →  ALB (HTTP)
-                                 ├── /projects*, /boards*, /columns*, /cards*, /actuator*  →  Backend (ECS Fargate, porta 8080)
-                                 └── /* (default)  →  Frontend (ECS Fargate, porta 80)
-                                                        Backend  →  RDS MySQL (subnet privada, porta 3306)
+    └── API Gateway (HTTPS) ─── único ponto de entrada público
+         ├── GET /report/*  →  Lambda (Node.js 18)  →  ALB interno  →  Backend
+         └── $default       →  VPC Link  →  ALB interno (inacessível pela internet)
+                                              ├── /projects*, /boards*, /columns*, /cards*, /actuator*  →  Backend (ECS Fargate, porta 8080)
+                                              └── /* (default)  →  Frontend (ECS Fargate, porta 80)
+                                                                     Backend  →  RDS MySQL (subnet privada, porta 3306)
 ```
+
+> **Segurança:** O ALB é `internal` (sem IP público) e só aceita tráfego via VPC Link do API Gateway. Ninguém acessa o backend diretamente pela internet.
 
 ---
 
@@ -154,7 +156,7 @@ aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com 2>/dev/n
 
 ## Etapa 5 — Deploy da Infraestrutura Principal (CloudFormation)
 
-O template `main.yaml` cria toda a infraestrutura de uma vez: VPC com subnets públicas e privadas, Internet Gateway, Route Tables, Security Groups, RDS MySQL em subnet privada, ALB internet-facing com roteamento por path, ECS Cluster Fargate, Task Definitions e Services para backend e frontend, e Log Groups no CloudWatch.
+O template `main.yaml` cria toda a infraestrutura de uma vez: VPC com subnets públicas e privadas, Internet Gateway, NAT Gateway (para que containers privados acessem ECR), Route Tables, Security Groups, RDS MySQL em subnet privada, ALB **interno** em subnets privadas com roteamento por path, ECS Cluster Fargate com tasks em subnets privadas, Task Definitions e Services para backend e frontend, e Log Groups no CloudWatch.
 
 ### Obter ARN da LabRole
 
@@ -190,12 +192,12 @@ aws cloudformation wait stack-create-complete --stack-name kanban-main --region 
 
 ### Obter ALB DNS
 
-Recupera o endereço público do Application Load Balancer. É por esse DNS que acessamos a aplicação no navegador e que a Lambda chama o backend.
+Recupera o endereço interno do Application Load Balancer. Esse DNS só é resolvível dentro da VPC — a Lambda usa ele para chamar o backend.
 
 ```bash
-ALB_DNS=$(aws elbv2 describe-load-balancers --region $AWS_REGION \
-  --query "LoadBalancers[?LoadBalancerName=='kanban-prod-alb'].DNSName" --output text)  # Filtra pelo nome do ALB e extrai só o DNS
-echo "ALB DNS: $ALB_DNS"  # Ex: kanban-prod-alb-123456.us-east-1.elb.amazonaws.com
+ALB_DNS=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='ALBDnsName'].OutputValue" --output text)  # DNS interno do ALB
+echo "ALB DNS (interno): $ALB_DNS"  # Ex: internal-kanban-prod-alb-123456.us-east-1.elb.amazonaws.com
 ```
 
 ---
@@ -249,18 +251,43 @@ echo "Lambda ARN: $LAMBDA_ARN"  # Ex: arn:aws:lambda:us-east-1:730335459975:func
 
 ## Etapa 7 — Deploy do API Gateway
 
-O API Gateway HTTP API é o ponto de entrada HTTPS da aplicação. Roteia requisições de relatório (`/report/*`) para a Lambda e todo o resto (`$default`) para o ALB, que por sua vez distribui entre backend e frontend.
+O API Gateway HTTP API é o ponto de entrada HTTPS da aplicação. Roteia requisições de relatório (`/report/*`) para a Lambda e todo o resto (`$default`) para o ALB interno via VPC Link — garantindo que nenhum tráfego alcance o backend sem passar pelo Gateway.
+
+### Obter outputs adicionais da stack principal
+
+O API Gateway precisa de informações sobre as subnets privadas e o ALB para criar o VPC Link:
+
+```bash
+ALB_LISTENER_ARN=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='ALBListenerArn'].OutputValue" --output text)  # ARN do Listener do ALB
+PRIVATE_SUBNET1_ID=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnet1Id'].OutputValue" --output text)  # Subnet privada 1
+PRIVATE_SUBNET2_ID=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnet2Id'].OutputValue" --output text)  # Subnet privada 2
+ALB_SG_ID=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='ALBSecurityGroupId'].OutputValue" --output text)  # Security Group do ALB
+
+echo "ALB Listener: $ALB_LISTENER_ARN"
+echo "Subnets: $PRIVATE_SUBNET1_ID, $PRIVATE_SUBNET2_ID"
+echo "SG: $ALB_SG_ID"
+```
+
+### Criar a stack do API Gateway
 
 ```bash
 aws cloudformation create-stack \
-  --stack-name kanban-api-gateway \                                   # Nome da stack do API Gateway
-  --template-body file://infrastructure/api-gateway.yaml \            # Template com rotas e integrações
+  --stack-name kanban-api-gateway \
+  --template-body file://infrastructure/api-gateway.yaml \
   --parameters \
-    ParameterKey=BackendALBDnsName,ParameterValue=$ALB_DNS \          # DNS do ALB para rota catch-all
-    ParameterKey=LambdaFunctionArn,ParameterValue=$LAMBDA_ARN \       # ARN da Lambda para rotas /report/*
+    ParameterKey=BackendALBDnsName,ParameterValue=$ALB_DNS \
+    ParameterKey=BackendALBListenerArn,ParameterValue=$ALB_LISTENER_ARN \
+    ParameterKey=LambdaFunctionArn,ParameterValue=$LAMBDA_ARN \
+    ParameterKey=PrivateSubnet1Id,ParameterValue=$PRIVATE_SUBNET1_ID \
+    ParameterKey=PrivateSubnet2Id,ParameterValue=$PRIVATE_SUBNET2_ID \
+    ParameterKey=ALBSecurityGroupId,ParameterValue=$ALB_SG_ID \
   --region $AWS_REGION
 
-echo "Aguardando API Gateway..."
+echo "Aguardando API Gateway + VPC Link..."
 aws cloudformation wait stack-create-complete --stack-name kanban-api-gateway --region $AWS_REGION && echo "✓ API Gateway criado!" || echo "✗ Falhou"
 ```
 
@@ -280,10 +307,10 @@ echo "API Gateway: $API_ENDPOINT"  # Ex: https://abc123.execute-api.us-east-1.am
 
 ## Etapa 8 — Rebuild do Frontend com URL da API
 
-O frontend React precisa saber para onde enviar as requisições HTTP. A variável `VITE_API_URL` é embutida no build (Vite substitui em tempo de compilação). Reconstruímos a imagem apontando para o ALB e forçamos um novo deploy no ECS.
+O frontend React precisa saber para onde enviar as requisições HTTP. A variável `VITE_API_URL` é embutida no build (Vite substitui em tempo de compilação). Como o ALB agora é **interno** (inacessível pela internet), o frontend deve apontar para o **API Gateway**.
 
 ```bash
-echo "VITE_API_URL=http://$ALB_DNS" > frontend/.env.production  # Cria arquivo de env com URL da API para o build do Vite
+echo "VITE_API_URL=$API_ENDPOINT" > frontend/.env.production  # Aponta para o API Gateway (HTTPS público)
 
 docker build -t kanban-frontend ./frontend          # Rebuild com a nova URL embutida no JavaScript
 docker tag kanban-frontend:latest $FRONTEND_IMAGE   # Tag com endereço do ECR
@@ -292,31 +319,31 @@ docker push $FRONTEND_IMAGE                         # Envia nova imagem para o E
 aws ecs update-service \
   --cluster kanban-prod-cluster \
   --service kanban-prod-frontend-service \
-  --force-new-deployment \                          # Força o ECS a puxar a imagem nova e substituir o container
+  --force-new-deployment \
   --region $AWS_REGION > /dev/null
 
-echo "✓ Frontend atualizado. Aguarde 2-3 min e acesse: http://$ALB_DNS"
+echo "✓ Frontend atualizado. Aguarde 2-3 min e acesse: $API_ENDPOINT"
 ```
 
 ---
 
 ## Etapa 9 — Verificação
 
-Testa cada camada da arquitetura: o health check confirma que o Spring Boot está rodando e conectado ao RDS; a listagem de projetos testa o CRUD completo (API Gateway → ALB → Backend → RDS); o relatório testa a Lambda (API Gateway → Lambda → ALB → Backend).
+Testa cada camada da arquitetura via API Gateway (único ponto de entrada público). O ALB é interno e não pode ser acessado diretamente pela internet.
 
 Aguarde 2-3 minutos, depois:
 
 ```bash
-echo "--- Health Check ---"
-curl -s http://$ALB_DNS/actuator/health      # Testa se o Spring Boot está rodando (endpoint do Actuator)
+echo "--- Health Check (via API Gateway → ALB → Backend) ---"
+curl -s $API_ENDPOINT/actuator/health      # Testa: API Gateway → VPC Link → ALB → Backend
 
 echo ""
 echo "--- Projetos (CRUD) ---"
-curl -s http://$ALB_DNS/projects             # Testa o fluxo completo: ALB → Backend → RDS → resposta JSON
+curl -s $API_ENDPOINT/projects             # Testa o fluxo completo: API Gateway → ALB → Backend → RDS
 
 echo ""
 echo "--- Lambda (relatório) ---"
-curl -s $API_ENDPOINT/report/board/1         # Testa: API Gateway → Lambda → Backend → resposta JSON
+curl -s $API_ENDPOINT/report/board/1       # Testa: API Gateway → Lambda → ALB → Backend
 ```
 
 Resultados esperados:
@@ -324,7 +351,16 @@ Resultados esperados:
 - Projetos: `[]` (banco vazio)
 - Relatório: `{"error":"Not Found","message":"Quadro com id 1 não encontrado"}` (correto, não há boards)
 
-**Acesse no navegador:** `http://ALB_DNS_AQUI` para ver o frontend React.
+**Acesse no navegador:** o endpoint do API Gateway para ver o frontend React.
+
+### Comprovação de que o ALB é inacessível diretamente
+
+```bash
+echo "--- Tentando acessar ALB diretamente (deve falhar) ---"
+curl -s --max-time 5 http://$ALB_DNS/actuator/health || echo "✓ ALB inacessível pela internet (esperado)"
+```
+
+Se retornar timeout ou erro de conexão, confirma que o ALB interno só é acessível via API Gateway.
 
 ---
 
@@ -395,20 +431,21 @@ echo "✓ Tudo deletado"
 |---------|-----------|
 | ECS Fargate backend (0.5 vCPU + 1 GB) | $0.0327 |
 | ECS Fargate frontend (0.25 vCPU + 0.5 GB) | $0.0164 |
-| ALB | $0.0225 |
+| ALB (internal) | $0.0225 |
+| NAT Gateway | $0.045 |
 | RDS db.t3.micro | $0.017 |
 | Lambda + API Gateway | ~$0 (free tier) |
-| **Total por hora** | **~$0.088** |
+| **Total por hora** | **~$0.133** |
 
 ### Projeção
 
 | Cenário | Custo/dia | USD 50 duram |
 |---------|-----------|-------------|
-| Rodando 24/7 | ~$2.12 | **~23 dias** |
-| Rodando 12h/dia | ~$1.06 | **~47 dias** |
-| Rodando 4h/dia (só para testar) | ~$0.35 | **~142 dias** |
+| Rodando 24/7 | ~$3.20 | **~15 dias** |
+| Rodando 12h/dia | ~$1.60 | **~31 dias** |
+| Rodando 4h/dia (só para testar) | ~$0.53 | **~94 dias** |
 
-### Conclusão: Com $50 e uso 24/7, dura ~3 semanas. Em 2 semanas consome ~$30.
+### Conclusão: Com $50 e uso 24/7, dura ~2 semanas. O NAT Gateway é o maior custo individual (~$1.08/dia).
 
 ---
 
