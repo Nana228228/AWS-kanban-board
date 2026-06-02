@@ -110,9 +110,18 @@ fi
 # Obter outputs
 ALB_DNS=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
   --query "Stacks[0].Outputs[?OutputKey=='ALBDnsName'].OutputValue" --output text)
+ALB_LISTENER_ARN=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='ALBListenerArn'].OutputValue" --output text)
+PRIVATE_SUBNET1_ID=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnet1Id'].OutputValue" --output text)
+PRIVATE_SUBNET2_ID=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnet2Id'].OutputValue" --output text)
+ALB_SG_ID=$(aws cloudformation describe-stacks --stack-name kanban-main --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='ALBSecurityGroupId'].OutputValue" --output text)
 
 echo "✓ Infraestrutura principal deployada"
-echo "✓ ALB DNS: $ALB_DNS"
+echo "✓ ALB DNS (internal): $ALB_DNS"
+echo "✓ ALB Listener ARN: $ALB_LISTENER_ARN"
 
 # ===== ETAPA 5: Build e Push do Frontend =====
 echo ""
@@ -121,7 +130,7 @@ echo "  ETAPA 5: Build e Push do Frontend"
 echo "═══════════════════════════════════════════"
 
 # O frontend precisa saber a URL da API. 
-# Por enquanto, aponta para o ALB. Será atualizado para API Gateway depois.
+# O ALB é interno, então usamos placeholder e atualizamos na Etapa 8 com a URL do API Gateway.
 echo "VITE_API_URL=http://$ALB_DNS" > frontend/.env.production
 
 docker build -t kanban-frontend ./frontend
@@ -221,7 +230,11 @@ if [ "$APIGW_STATUS" = "DOES_NOT_EXIST" ]; then
     --template-body file://infrastructure/api-gateway.yaml \
     --parameters \
       ParameterKey=BackendALBDnsName,ParameterValue=$ALB_DNS \
+      ParameterKey=BackendALBListenerArn,ParameterValue=$ALB_LISTENER_ARN \
       ParameterKey=LambdaFunctionArn,ParameterValue=$LAMBDA_ARN \
+      ParameterKey=PrivateSubnet1Id,ParameterValue=$PRIVATE_SUBNET1_ID \
+      ParameterKey=PrivateSubnet2Id,ParameterValue=$PRIVATE_SUBNET2_ID \
+      ParameterKey=ALBSecurityGroupId,ParameterValue=$ALB_SG_ID \
     --region $AWS_REGION
 
   echo "Aguardando criação do API Gateway..."
@@ -232,7 +245,11 @@ else
     --template-body file://infrastructure/api-gateway.yaml \
     --parameters \
       ParameterKey=BackendALBDnsName,ParameterValue=$ALB_DNS \
+      ParameterKey=BackendALBListenerArn,ParameterValue=$ALB_LISTENER_ARN \
       ParameterKey=LambdaFunctionArn,ParameterValue=$LAMBDA_ARN \
+      ParameterKey=PrivateSubnet1Id,ParameterValue=$PRIVATE_SUBNET1_ID \
+      ParameterKey=PrivateSubnet2Id,ParameterValue=$PRIVATE_SUBNET2_ID \
+      ParameterKey=ALBSecurityGroupId,ParameterValue=$ALB_SG_ID \
     --region $AWS_REGION 2>/dev/null || echo "Nenhuma atualização necessária"
 fi
 
